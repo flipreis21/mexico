@@ -21,120 +21,77 @@ O banco de dados `mexico` é composto por dados de diversas fontes, ingeridos at
 
 -----
 
-## 2\. Fase de Carga (ETL) - Ingestão das Fontes de Dados
+## 2\. Configuração do Ambiente e Dados de Origem
 
-A seguir, é detalhado o pipeline de ETL para cada fonte de dados principal.
+Este repositório contém os **scripts** (`src/`), mas não os **dados** brutos, que são muito grandes para o Git.
 
-### 2.1. `public.poligono` (Polígonos de Códigos Postais)
+Para que os scripts de ingestão funcionem, os dados de origem devem ser baixados e colocados nos caminhos exatos que os scripts esperam. A pasta `data/` deste repositório contém `README`s que descrevem as fontes e os caminhos esperados para cada conjunto de dados.
 
-Estes dados representam os polígonos de códigos postais, fornecidos por Thierry. Os arquivos SHP de origem foram obtidos de `/mnt/dados/download/mexico/2022-12-13_portal`.
+**Resumo das Fontes de Dados e Caminhos Esperados:**
+
+| Fonte de Dados | Link de Download | Comando de Extração (Exemplo) | Caminho Esperado |
+| :--- | :--- | :--- | :--- |
+| Polígonos CEP | [SharePoint do Thierry](https://addressforall-my.sharepoint.com/personal/thierry_addressforall_org/_layouts/15/onedrive.aspx?id=%2Fpersonal%2Fthierry%5Faddressforall%5Forg%2FDocuments%2FA4A%5FOperacao%5F20%2FImput%5FDados%2FMexico%2FCorreos%2F2022%2D12%2D13%5Fportal&ga=1) | `unzip -o "*.zip" -d /mnt/dados/download/mexico/poligonos/` | `/mnt/dados/download/mexico/poligonos/` |
+| Geoaddress | [Digital Guard](https://dl.digital-guard.org/d0b51cdba97f9c04eb7e8e4c17695770d66730b895308543781729851e0bd67e.zip) | `unzip [arquivo.zip] -d /mnt/dados/download/mexico/direccion` | `/mnt/dados/download/mexico/direccion` |
+| INEGI (CSV) | [Digital Guard](https://dl.digital-guard.org/ef59d60a53d2e96f6ffc13e07af908277b8e554549274ddbbac23eef15550d07.zip) | `unzip [arquivo.zip]` (Gera `inegi-20240621.csv`) | `/mnt/dados/download/mexico/` |
+| INEGI (SHPs) | (Fornecido por Carlos) | (N/A) | `/mnt/dados/MX/download-final` |
+| Banco `newgrid` | (Acesso de rede) | (N/A) | (Acesso de rede) |
+
+**Para reproduzir este projeto:**
+
+1.  Baixe todas as fontes de dados originais.
+2.  Extraia-as para os caminhos exatos listados acima.
+3.  **OU** edite os scripts em `src/` para apontar para os novos locais onde você salvou os dados.
+
+-----
+
+## 3\. Fase de Carga (ETL) - Ingestão das Fontes de Dados
+
+### 3.1. `public.poligono` (Polígonos de Códigos Postais)
+
+Estes dados representam os polígonos de códigos postais (Fonte: Thierry). Os arquivos SHP de origem são esperados em `/mnt/dados/download/mexico/poligonos/` (ver `data/poligono/README.md`).
 
   * **Script de Ingestão:** `src/ingestion/poligono/loop_pol.sh`
-      * Um script `bash` foi usado para iterar sobre todos os arquivos `.shp` na pasta de origem. O utilitário `shp2pgsql` foi usado para carregar os dados.
-      * O primeiro shapefile cria a tabela `poligono`.
-      * Os shapefiles subsequentes são anexados (`-a`) à tabela existente.
+      * Um script `bash` executado dentro da pasta de dados (`/mnt/dados/download/mexico/poligonos/`) que itera sobre todos os arquivos `.shp`.
+      * O utilitário `shp2pgsql` é usado para carregar os dados.
+      * O primeiro shapefile cria a tabela `poligono`, e os demais são anexados (`-a`).
 
-<!-- end list -->
+### 3.2. `public.direccion` (Geoaddress)
 
-```bash
-#!/bin/bash
-# Script: src/ingestion/poligono/loop_pol.sh
+Dados de geo-endereçamento (Fonte: Claiton). Os arquivos SHP de origem são esperados em `/mnt/dados/download/mexico/direccion` (ver `data/direccion/README.md`).
 
-primeiro=1
-for file in *.shp ; do
-        if [ $primeiro -eq 1 ] ; then
-                # (Assumindo que $file aponta para o local dos SHPs)
-                shp2pgsql $file poligono | psql -U postgres -d mexico
-                primeiro=0
-        else
-                shp2pgsql -a $file poligono | psql -U postgres -d mexico
-        fi
-done 2>&1 | tee log_pol.txt # Gera log no diretório de execução
-```
-
-### 2.2. `public.direccion` (Geoaddress)
-
-Dados de geo-endereçamento obtidos a partir dos procedimentos de Claiton. Os arquivos SHP de origem estavam em `/mnt/dados/download/mexico/direccion`.
-
-  * **Referência:** [digital-guard/preserv-MX (Geoaddress)](https://github.com/digital-guard/preserv-MX/tree/main/data/_pk0002.01)
   * **Script de Ingestão:** `src/ingestion/direccion/loop.sh`
-      * O mesmo método da tabela `poligono` foi aplicado: `shp2pgsql` em um loop `bash` para criar e anexar dados na tabela `direccion`.
+      * Mesmo método da tabela `poligono`: `shp2pgsql` em um loop `bash` executado na pasta de dados para criar e anexar dados na tabela `direccion`.
 
-<!-- end list -->
-
-```bash
-#!/bin/bash
-# Script: src/ingestion/direccion/loop.sh
-
-primeiro=1
-for file in *.shp ; do
-        if [ $primeiro -eq 1 ] ; then
-                shp2pgsql $file direccion | psql -U postgres -d mexico
-                primeiro=0
-        else
-                shp2pgsql -a $file direccion | psql -U postgres -d mexico
-        fi
-done 2>&1 | tee log.txt # Gera log no diretório de execução
-```
-
-### 2.3. `optim.jurisdiction` e `optim.jurisdiction_geom` (Limites Administrativos)
+### 3.3. `optim.jurisdiction` e `optim.jurisdiction_geom` (Limites Administrativos)
 
 Estas tabelas foram migradas de um banco de dados (`newgrid`) para o banco `mexico`.
 
   * **Script de Migração:** `src/migration/migrate_jurisdiction.sh`
-  * **Processo:** O script executa um processo de 3 etapas:
-    1.  **Copiar Estrutura:** A estrutura das tabelas (sem dados) é copiada usando `pg_dump`.
-    2.  **Copiar Dados (Filtrados):** Os dados são exportados do `newgrid` (`\copy (SELECT ... WHERE isolabel_ext LIKE 'MX%') TO STDOUT`) e importados no `mexico` (`\copy ... FROM STDIN`), usando um "pipe" (`|`).
-    3.  **Aplicar Índices:** Os índices e chaves estrangeiras são aplicados usando `pg_dump --section=post-data`.
+  * **Processo:** O script executa um processo de 3 etapas para copiar a estrutura, copiar os dados filtrados (`WHERE isolabel_ext LIKE 'MX%'`) e, por fim, aplicar os índices e chaves.
 
-*(Você pode colocar os comandos `pg_dump` e `psql` dentro do arquivo .sh referenciado acima)*
+*(Ver script para detalhes dos comandos `pg_dump` e `psql \copy`)*
 
-### 2.4. `public.inegi` (Endereços INEGI - Fonte CSV)
+### 3.4. `public.inegi` (Endereços INEGI - Fonte CSV)
 
-Dados de endereço em formato CSV, obtidos dos procedimentos de Carlos (OpenAddresses). O arquivo CSV (`inegi-20240621.csv`) foi baixado de `dl.digital-guard.org/...`
+Dados de endereço em formato CSV (Fonte: Carlos/OpenAddresses). O arquivo `inegi-20240621.csv` é esperado em `/mnt/dados/download/mexico/` (ver `data/inegi_csv/README.md`).
 
   * **Script de Ingestão:** `src/ingestion/inegi/inegi_load.sql`
   * **Pipeline de ETL:** O script SQL contém os seguintes passos:
-    1.  **Criação da Tabela:**
-        ```sql
-        CREATE TABLE inegi (
-            gid serial PRIMARY KEY,
-            -- ... (outras colunas) ...
-            geom geometry(point, 6362),
-            postcode text
-        );
-        ```
+    1.  **Criação da Tabela:** (`CREATE TABLE inegi (...)`)
     2.  **Ingestão dos Dados (CSV):**
         ```sql
-        -- (Caminho do CSV precisa ser acessível pelo servidor Postgres)
-        \COPY inegi(gid, estado, ...)
+        -- ATENÇÃO: O caminho abaixo é absoluto e esperado pelo script.
+        \COPY inegi(...)
         FROM '/mnt/dados/download/mexico/inegi-20240621.csv'
         DELIMITER ',' CSV HEADER;
         ```
-    3.  **Pós-processamento (Criação de Geometrias):**
-        ```sql
-        UPDATE inegi
-        SET geom = ST_Transform(ST_SetSRID(ST_MakePoint(longitude, latitude), 4326), 6362);
+    3.  **Pós-processamento:** Criação de geometrias (`geom` em 6362, `geom_wgs` em 4326) e indexação espacial.
+    4.  **Enriquecimento:** Preenchimento da coluna `postcode` via `ST_Within` com a tabela `poligono`.
 
-        ALTER TABLE inegi ADD COLUMN geom_wgs geometry(point, 4326);
-        UPDATE inegi
-        SET geom_wgs = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326);
+### 3.5. `public.new_inegi` (Endereços INEGI - Fonte Shapefiles)
 
-        CREATE INDEX inegi_idx ON inegi USING GIST(geom);
-        ```
-    4.  **Enriquecimento (Primeiro Spatial Join):**
-          * O `postcode` foi preenchido usando os polígonos da tabela `poligono`.
-        <!-- end list -->
-        ```sql
-        UPDATE inegi i
-        SET postcode = p.cp
-        FROM poligono p
-        WHERE ST_Within(i.geom, p.geom);
-        ```
-
-### 2.5. `public.new_inegi` (Endereços INEGI - Fonte Shapefiles)
-
-Esta é a fonte principal de dados de endereço, ingerida a partir de um conjunto complexo de shapefiles brutos (Fonte: Carlos, `/mnt/dados/MX/download-final`).
+Esta é a fonte principal de dados de endereço, ingerida a partir de um conjunto complexo de shapefiles brutos (Fonte: Carlos, esperado em `/mnt/dados/MX/download-final`).
 
   * **Fase 1: Staging (Extração e Organização)**
 
@@ -143,28 +100,20 @@ Esta é a fonte principal de dados de endereço, ingerida a partir de um conjunt
   * **Fase 2: Carga (GDAL/OGR via Docker)**
 
       * O processo de carga foi focado na pasta `direccion`, que continha os shapefiles de endereço (`*ne.shp`).
-
       * **Script Principal:** `src/ingestion/new_inegi/ingest.sh`
-
-          * Um script `bash` que usa `ogr2ogr` (via Docker `ghcr.io/osgeo/gdal`) em loop.
-          * O primeiro shapefile **cria** a tabela `public.new_inegi` (EPSG:6362, `-nlt PROMOTE_TO_MULTI`).
-          * Os demais shapefiles são **anexados** (`-append`).
-          * *Obs: Este processo é o que cria o schema `ogr_system_tables`.*
-
+          * Script `bash` que usa `ogr2ogr` (via Docker) em loop. O primeiro SHP cria a tabela `public.new_inegi` (EPSG:6362), e os demais são anexados (`-append`).
       * **Script de Contingência:** `src/ingestion/new_inegi/re_ingest.sh`
-
-          * Caso a ingestão inicial seja interrompida.
-          * O script define um ponto de partida (`LAST_STARTED=...`) e continua o `ogr2ogr -append` a partir daquele arquivo, garantindo que não haja duplicatas.
+          * Script de retomada que continua o `ogr2ogr -append` a partir de um ponto de parada (`LAST_STARTED=...`).
 
 ### 2.6. `public.overture_add` e `public.overture3` (Overture Maps)
 
-Dois métodos foram usados para ingerir e comparar os mesmos dados de endereço da Overture Maps (Release `2025-08-20.1`).
+Dois métodos foram usados para ingerir e comparar os mesmos dados de endereço da Overture Maps.
 
 #### 2.6.1. Método 1: `overture_add` (DuckDB + GDAL + FDW)
 
-  * **Fase 1 (DuckDB):** O script `src/ingestion/overture/overture_add.sql` foi usado no DuckDB para ler os Parquets do S3 da Overture, filtrar (`country = 'MX'`) e salvar localmente.
-  * **Fase 2 (GDAL):** `ogr2ogr` foi usado para transformar o Parquet (com JSON aninhado) em GeoJSON e de volta para Parquet, corrigindo problemas de tipo.
-  * **Fase 3 (PostGIS FDW):** A extensão `parquet_fdw` foi usada para criar uma `FOREIGN TABLE` (`overture_add`) que lê o arquivo Parquet transformado.
+  * **Fase 1 (DuckDB):** O script `src/ingestion/overture/overture_add.sql` lê Parquets do S3 da Overture, filtra por `country = 'MX'` e salva localmente.
+  * **Fase 2 (GDAL):** `ogr2ogr` é usado para transformar o Parquet (com JSON aninhado) em GeoJSON e de volta para Parquet, corrigindo problemas de tipo.
+  * **Fase 3 (PostGIS FDW):** A extensão `parquet_fdw` é usada para criar uma `FOREIGN TABLE` (`overture_add`) que lê o arquivo Parquet.
 
 #### 2.6.2. Método 2: `overture3` (DuckDB-Postgres Connector)
 
