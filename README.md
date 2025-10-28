@@ -135,6 +135,36 @@ Ambos os métodos (`overture_add` e `overture3`) exigem o `duckdb` (CLI) instala
 
 -----
 
-## 3\. Fase de Análise e Enriquecimento
+## 3. Fase de Análise e Enriquecimento
 
-(Aguardando os próximos procedimentos...)
+Após a ingestão de todas as fontes de dados, a próxima fase foi enriquecer os dados de `poligono` (códigos postais) com os atributos hierárquicos dos limites administrativos (`optim.jurisdiction`).
+
+### 3.1. Pré-requisito: Limpeza de Geometrias Inválidas
+
+As análises espaciais (como `ST_Within` e `ST_Intersection`) falham ou geram erros se as geometrias forem inválidas (ex: auto-interseções).
+
+* **Problema:** Durante a análise, foram encontrados `NOTICE: Ring Self-intersection...`. Uma tentativa de correção com `ST_MakeValid()` falhou com o erro `ERROR: Geometry type (GeometryCollection) does not match column type (MultiPolygon)`.
+* **Solução:** Um script de limpeza foi executado para corrigir as geometrias usando uma combinação de `ST_MakeValid()` e `ST_CollectionExtract()` para garantir que o tipo de geometria fosse preservado.
+* **Script:** `src/analysis/01_clean_geometries.sql`
+
+### 3.2. Enriquecimento dos Polígonos (CEP) com Dados de Jurisdição
+
+O objetivo era preencher as colunas `name` e `parent_abbrev` na tabela `poligono` com base nos dados da tabela `optim.jurisdiction`.
+
+* **Desafio:** Um polígono de CEP (`poligono`) pode estar perfeitamente contido em uma jurisdição (ex: um município) ou pode estar em uma borda, cruzando duas ou mais jurisdições.
+* **Solução (Lógica Híbrida):** Foi desenvolvido um script `UPDATE` que utiliza Common Table Expressions (CTEs) para tratar ambos os casos:
+    1.  **CTE `matches_within_unicos`:** Resolve os "casos fáceis", onde o `poligono` está 100% contido (`ST_Within`) em *exatamente uma* jurisdição.
+    2.  **CTE `matches_sobreposicao`:** Resolve os "casos difíceis" (polígonos de borda) calculando a interseção (`ST_Intersection`) com todas as jurisdições que tocam (`ST_Intersects`) e selecionando aquela com a **maior área de sobreposição** (`ST_Area`).
+    3.  **`UNION ALL`:** Junta os resultados dos "fáceis" e "difíceis".
+    4.  **`UPDATE`:** Atualiza a tabela `poligono`.
+
+* **Descoberta e Correção de Bug (MX-CMX):**
+    * A primeira versão da consulta usava um filtro (`Length(isolabel_ext) > 6`) para remover jurisdições de nível superior.
+    * **Problema:** Isso excluiu incorretamente a jurisdição da Cidade do México (`MX-CMX`), que tem 6 caracteres.
+    * **Sintomas:** 1.114 polígonos que pertenciam a `MX-CMX` ficaram com valores `NULL`, e polígonos na borda foram atribuídos incorretamente a jurisdições vizinhas.
+    * **Correção:** O script final foi corrigido para re-processar todos os polígonos (sobrescrevendo os erros) com uma lógica de filtro ajustada: `(Length(jd.isolabel_ext) > 6 OR jd.isolabel_ext = 'MX-CMX')`.
+
+* **Script Final:** `src/analysis/02_enrich_poligono_jurisdiction.sql`
+
+---
+
