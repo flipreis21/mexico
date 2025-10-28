@@ -1,6 +1,6 @@
 # Projeto de Banco de Dados Geoespacial - México
 
-Este repositório documenta o processo de criação, ingestão e enriquecimento de um banco de dados PostGIS (`mexico`) focado em dados geoespaciais do México. O objetivo é consolidar múltiplas fontes de dados (limites administrativos, códigos postais, endereços) em uma única base coesa para análise.
+Este repositório documenta o processo de criação, ingestão, enriquecimento e exportação de um banco de dados PostGIS (`mexico`) focado em dados geoespaciais do México. O objetivo é consolidar múltiplas fontes de dados em uma única base coesa para análise.
 
 Os scripts de ingestão e análise referenciados neste documento estão localizados no diretório `src/`.
 
@@ -18,6 +18,7 @@ O banco de dados `mexico` é composto por dados de diversas fontes, ingeridos at
 | `jurisdiction_geom` | `optim` | Banco `newgrid` (Limites Adm.) | `pg_dump` + `psql \copy` | `src/migration/migrate_jurisdiction.sh` |
 | `overture_add` | `public` | Overture Maps (Endereços) | DuckDB + GDAL + `parquet_fdw` | `src/ingestion/overture/overture_add.sql` |
 | `overture3` | `public` | Overture Maps (Endereços) | DuckDB + `postgres` connector | `src/ingestion/overture/overture_to_postgres.sql` |
+| `produto_final_staging` | `public` | Tabela `new_inegi` | `CREATE TABLE AS SELECT ...` | `src/analysis/03_create_staging_table.sql`|
 
 -----
 
@@ -31,9 +32,9 @@ Para que os scripts de ingestão funcionem, os dados de origem devem ser baixado
 
 | Fonte de Dados | Link de Download | Comando de Extração (Exemplo) | Caminho Esperado |
 | :--- | :--- | :--- | :--- |
-| Polígonos CEP | [SharePoint do Thierry](https://addressforall-my.sharepoint.com/personal/thierry_addressforall_org/_layouts/15/onedrive.aspx?id=%2Fpersonal%2Fthierry%5Faddressforall%5Forg%2FDocuments%2FA4A%5FOperacao%5F20%2FImput%5FDados%2FMexico%2FCorreos%2F2022%2D12%2D13%5Fportal&ga=1) | `unzip -o "*.zip" -d /mnt/dados/download/mexico/poligonos/` | `/mnt/dados/download/mexico/poligonos/` |
-| Geoaddress | [Digital Guard](https://dl.digital-guard.org/d0b51cdba97f9c04eb7e8e4c17695770d66730b895308543781729851e0bd67e.zip) | `unzip [arquivo.zip] -d /mnt/dados/download/mexico/direccion` | `/mnt/dados/download/mexico/direccion` |
-| INEGI (CSV) | [Digital Guard](https://dl.digital-guard.org/ef59d60a53d2e96f6ffc13e07af908277b8e554549274ddbbac23eef15550d07.zip) | `unzip [arquivo.zip]` (Gera `inegi-20240621.csv`) | `/mnt/dados/download/mexico/` |
+| Polígonos CEP | [SharePoint do Thierry](https://www.google.com/search?q=https://addressforall-my.sharepoint.com/personal/thierry_addressforall_org/_layouts/15/onedrive.aspx%3Fid%3D%252Fpersonal%252Fthierry%255Faddressforall%255Forg%252FDocuments%252FA4A%255FOperacao%255F20%252FImput%255FDados%252FMexico%252FCorreos%252F2022%252D12%252D13%255Fportal%26ga%3D1) | `unzip -o "*.zip" -d /mnt/dados/download/mexico/poligonos/` | `/mnt/dados/download/mexico/poligonos/` |
+| Geoaddress | [Digital Guard](https://www.google.com/search?q=https://dl.digital-guard.org/d0b51cdba97f9c04eb7e8e4c17695770d66730b895308543781729851e0bd67e.zip) | `unzip [arquivo.zip] -d /mnt/dados/download/mexico/direccion` | `/mnt/dados/download/mexico/direccion` |
+| INEGI (CSV) | [Digital Guard](https://www.google.com/search?q=https://dl.digital-guard.org/ef59d60a53d2e96f6ffc13e07af908277b8e554549274ddbbac23eef15550d07.zip) | `unzip [arquivo.zip]` (Gera `inegi-20240621.csv`) | `/mnt/dados/download/mexico/` |
 | INEGI (SHPs) | (Fornecido por Carlos) | (N/A) | `/mnt/dados/MX/download-final` |
 | Banco `newgrid` | (Acesso de rede) | (N/A) | (Acesso de rede) |
 
@@ -49,122 +50,145 @@ Para que os scripts de ingestão funcionem, os dados de origem devem ser baixado
 
 ### 3.1. `public.poligono` (Polígonos de Códigos Postais)
 
-Estes dados representam os polígonos de códigos postais (Fonte: Thierry). Os arquivos SHP de origem são esperados em `/mnt/dados/download/mexico/poligonos/` (ver `data/poligono/README.md`).
+Estes dados representam os polígonos de códigos postais (Fonte: Thierry). Os arquivos SHP de origem são esperados em `/mnt/dados/download/mexico/poligonos/`.
 
   * **Script de Ingestão:** `src/ingestion/poligono/loop_pol.sh`
-      * Um script `bash` executado dentro da pasta de dados (`/mnt/dados/download/mexico/poligonos/`) que itera sobre todos os arquivos `.shp`.
-      * O utilitário `shp2pgsql` é usado para carregar os dados.
-      * O primeiro shapefile cria a tabela `poligono`, e os demais são anexados (`-a`).
+  * **Processo:** Um loop `bash` (`shp2pgsql`) cria a tabela `poligono` com o primeiro SHP e anexa (`-a`) os demais.
 
 ### 3.2. `public.direccion` (Geoaddress)
 
-Dados de geo-endereçamento (Fonte: Claiton). Os arquivos SHP de origem são esperados em `/mnt/dados/download/mexico/direccion` (ver `data/direccion/README.md`).
+Dados de geo-endereçamento (Fonte: Claiton). Os arquivos SHP de origem são esperados em `/mnt/dados/download/mexico/direccion`.
 
   * **Script de Ingestão:** `src/ingestion/direccion/loop.sh`
-      * Mesmo método da tabela `poligono`: `shp2pgsql` em um loop `bash` executado na pasta de dados para criar e anexar dados na tabela `direccion`.
+  * **Processo:** Mesmo método da tabela `poligono`, criando e anexando dados na tabela `direccion`.
 
 ### 3.3. `optim.jurisdiction` e `optim.jurisdiction_geom` (Limites Administrativos)
 
-Estas tabelas foram migradas de um banco de dados (`newgrid`) para o banco `mexico`.
+Estas tabelas foram migradas do banco `newgrid` para o banco `mexico`.
 
   * **Script de Migração:** `src/migration/migrate_jurisdiction.sh`
   * **Processo:** O script executa um processo de 3 etapas para copiar a estrutura, copiar os dados filtrados (`WHERE isolabel_ext LIKE 'MX%'`) e, por fim, aplicar os índices e chaves.
 
-*(Ver script para detalhes dos comandos `pg_dump` e `psql \copy`)*
-
 ### 3.4. `public.inegi` (Endereços INEGI - Fonte CSV)
 
-Dados de endereço em formato CSV (Fonte: Carlos/OpenAddresses). O arquivo `inegi-20240621.csv` é esperado em `/mnt/dados/download/mexico/` (ver `data/inegi_csv/README.md`).
+Dados de endereço em formato CSV (Fonte: Carlos/OpenAddresses). O arquivo `inegi-20240621.csv` é esperado em `/mnt/dados/download/mexico/`.
 
   * **Script de Ingestão:** `src/ingestion/inegi/inegi_load.sql`
-  * **Pipeline de ETL:** O script SQL contém os seguintes passos:
-    1.  **Criação da Tabela:** (`CREATE TABLE inegi (...)`)
-    2.  **Ingestão dos Dados (CSV):**
-        ```sql
-        -- ATENÇÃO: O caminho abaixo é absoluto e esperado pelo script.
-        \COPY inegi(...)
-        FROM '/mnt/dados/download/mexico/inegi-20240621.csv'
-        DELIMITER ',' CSV HEADER;
-        ```
-    3.  **Pós-processamento:** Criação de geometrias (`geom` em 6362, `geom_wgs` em 4326) e indexação espacial.
-    4.  **Enriquecimento:** Preenchimento da coluna `postcode` via `ST_Within` com a tabela `poligono`.
+  * **Pipeline de ETL:** O script SQL cria a tabela, ingere os dados via `\COPY`, cria as geometrias (`geom` em 6362, `geom_wgs` em 4326) e enriquece o `postcode` usando `ST_Within` com a tabela `poligono`.
 
 ### 3.5. `public.new_inegi` (Endereços INEGI - Fonte Shapefiles)
 
 Esta é a fonte principal de dados de endereço, ingerida a partir de um conjunto complexo de shapefiles brutos (Fonte: Carlos, esperado em `/mnt/dados/MX/download-final`).
 
-  * **Fase 1: Staging (Extração e Organização)**
+  * **Fase 1: Staging (Extração e Organização):** `chmod`, `unzip` recursivo e `find` para catalogar os SHPs na pasta `direccion`.
+  * **Fase 2: Carga (GDAL/OGR via Docker):**
+      * **Script Principal:** `src/ingestion/new_inegi/ingest.sh` (cria a tabela `new_inegi` com o primeiro SHP e anexa os demais via `ogr2ogr -append`).
+      * **Script de Contingência:** `src/ingestion/new_inegi/re_ingest.sh` (retoma a ingestão a partir de um ponto de parada).
 
-      * (Documentação dos procedimentos manuais/scripts de `chmod`, `unzip` recursivo e `find` para catalogar os SHPs na pasta `direccion`).
+### 3.6. `public.overture_add` e `public.overture3` (Overture Maps)
 
-  * **Fase 2: Carga (GDAL/OGR via Docker)**
-
-      * O processo de carga foi focado na pasta `direccion`, que continha os shapefiles de endereço (`*ne.shp`).
-      * **Script Principal:** `src/ingestion/new_inegi/ingest.sh`
-          * Script `bash` que usa `ogr2ogr` (via Docker) em loop. O primeiro SHP cria a tabela `public.new_inegi` (EPSG:6362), e os demais são anexados (`-append`).
-      * **Script de Contingência:** `src/ingestion/new_inegi/re_ingest.sh`
-          * Script de retomada que continua o `ogr2ogr -append` a partir de um ponto de parada (`LAST_STARTED=...`).
-
-### 2.6. `public.overture_add` e `public.overture3` (Overture Maps)
-
-Dois métodos foram usados para ingerir e comparar os mesmos dados de endereço da Overture Maps (Release `2025-08-20.1`).
+Dois métodos foram usados para ingerir e comparar os mesmos dados de endereço da Overture Maps.
 
 **Pré-requisito: Instalação do DuckDB**
+Ambos os métodos exigem o `duckdb` (CLI) instalado no sistema Linux.
 
-Ambos os métodos (`overture_add` e `overture3`) exigem o `duckdb` (CLI) instalado no sistema Linux.
+  * **Comando de Instalação (Linux):** `curl -s https://install.duckdb.org | sh`
 
-  * **Comando de Instalação (Linux):**
-    ```bash
-    curl -s https://install.duckdb.org | sh
-    ```
+#### 3.6.1. Método 1: `overture_add` (DuckDB + GDAL + FDW)
 
-#### 2.6.1. Método 1: `overture_add` (DuckDB + GDAL + FDW)
+  * **Script:** `src/ingestion/overture/overture_add.sql`
+  * **Processo:** O DuckDB baixa os Parquets do S3 da Overture. `ogr2ogr` é usado para converter/corrigir os tipos. A extensão `parquet_fdw` é usada no PostGIS para criar uma `FOREIGN TABLE`.
 
-  * **Fase 1 (DuckDB):** O script `src/ingestion/overture/overture_add.sql` é executado com `duckdb < src/ingestion/overture/overture_add.sql`. Ele lê Parquets do S3 da Overture, filtra por `country = 'MX'` e salva localmente.
-  * **Fase 2 (GDAL):** `ogr2ogr` é usado para transformar o Parquet (com JSON aninhado) em GeoJSON e de volta para Parquet, corrigindo problemas de tipo.
-  * **Fase 3 (PostGIS FDW):** A extensão `parquet_fdw` é usada para criar uma `FOREIGN TABLE` (`overture_add`) que lê o arquivo Parquet.
+#### 3.6.2. Método 2: `overture3` (DuckDB-Postgres Connector)
 
-#### 2.6.2. Método 2: `overture3` (DuckDB-Postgres Connector)
-
-  * **Método:** Este pipeline usou o DuckDB para se conectar diretamente ao PostGIS.
   * **Script:** `src/ingestion/overture/overture_to_postgres.sql`
-  * **Processo (Executado com `duckdb < src/ingestion/overture/overture_to_postgres.sql`):**
-    1.  O script instala as extensões `spatial` e `postgres` *dentro* do DuckDB.
-    2.  Conecta-se ao banco `mexico` via `ATTACH 'dbname=mexico...' AS pg`.
-    3.  `CREATE TABLE pg.public.overture3 AS SELECT ...` é usado para ler do S3 da Overture, transformar dados (ex: `TO_JSON()`, `ST_AsText()`) e criar uma **tabela física** (`overture3`) no PostGIS.
+  * **Processo:** O DuckDB (com as extensões `spatial` e `postgres`) conecta-se diretamente ao PostGIS (`ATTACH 'dbname=mexico...'`) e executa um `CREATE TABLE pg.public.overture3 AS SELECT ...` para ler do S3 e escrever uma tabela física no PostGIS.
 
 -----
 
-## 3. Fase de Análise e Enriquecimento
+## 4\. Fase de Análise e Enriquecimento
 
-Após a ingestão de todas as fontes de dados, a próxima fase foi enriquecer os dados de `poligono` (códigos postais) com os atributos hierárquicos dos limites administrativos (`optim.jurisdiction`).
+Após a ingestão, os dados brutos foram limpos e cruzados para gerar um produto final coeso.
 
-### 3.1. Pré-requisito: Limpeza de Geometrias Inválidas
+### 4.1. Pré-requisito: Limpeza de Geometrias Inválidas
 
-As análises espaciais (como `ST_Within` e `ST_Intersection`) falham ou geram erros se as geometrias forem inválidas (ex: auto-interseções).
+  * **Problema:** Análises espaciais falham com geometrias inválidas (`NOTICE: Ring Self-intersection...`).
+  * **Solução:** Um script de limpeza foi executado para corrigir as geometrias usando `ST_MakeValid()` e `ST_CollectionExtract()` (para evitar o erro `GeometryCollection does not match column type`).
+  * **Script:** `src/analysis/01_clean_geometries.sql`
 
-* **Problema:** Durante a análise, foram encontrados `NOTICE: Ring Self-intersection...`. Uma tentativa de correção com `ST_MakeValid()` falhou com o erro `ERROR: Geometry type (GeometryCollection) does not match column type (MultiPolygon)`.
-* **Solução:** Um script de limpeza foi executado para corrigir as geometrias usando uma combinação de `ST_MakeValid()` e `ST_CollectionExtract()` para garantir que o tipo de geometria fosse preservado.
-* **Script:** `src/analysis/01_clean_geometries.sql`
+### 4.2. Enriquecimento dos Polígonos (CEP) com Jurisdição
 
-### 3.2. Enriquecimento dos Polígonos (CEP) com Dados de Jurisdição
+O objetivo foi preencher os dados de Estado e Município na tabela `poligono`, usando `optim.jurisdiction` como fonte da verdade.
 
-O objetivo era preencher as colunas `name` e `parent_abbrev` na tabela `poligono` com base nos dados da tabela `optim.jurisdiction`.
+  * **Script:** `src/analysis/02_enrich_poligono_state_municipality.sql`
+  * **Lógica (Híbrida):** O script atualiza a tabela `poligono` em duas etapas, sempre usando o critério de **maior área de sobreposição** (`ST_Area(ST_Intersection(...))`):
+    1.  **Etapa 1 (Estado):** Encontra a jurisdição de `length(isolabel_ext) = 6` (ex: 'MX-JAL') com maior sobreposição e preenche `estado_name`.
+    2.  **Etapa 2 (Município):** Encontra a jurisdição de `length(isolabel_ext) > 6` (ex: 'MX-JAL-001') com maior sobreposição e preenche `municipio_name`.
+    <!-- end list -->
+      * **Exceção:** A Etapa 2 ignora polígonos onde o estado é `MX-CMX` (Ciudad de México).
 
-* **Desafio:** Um polígono de CEP (`poligono`) pode estar perfeitamente contido em uma jurisdição (ex: um município) ou pode estar em uma borda, cruzando duas ou mais jurisdições.
-* **Solução (Lógica Híbrida):** Foi desenvolvido um script `UPDATE` que utiliza Common Table Expressions (CTEs) para tratar ambos os casos:
-    1.  **CTE `matches_within_unicos`:** Resolve os "casos fáceis", onde o `poligono` está 100% contido (`ST_Within`) em *exatamente uma* jurisdição.
-    2.  **CTE `matches_sobreposicao`:** Resolve os "casos difíceis" (polígonos de borda) calculando a interseção (`ST_Intersection`) com todas as jurisdições que tocam (`ST_Intersects`) e selecionando aquela com a **maior área de sobreposição** (`ST_Area`).
-    3.  **`UNION ALL`:** Junta os resultados dos "fáceis" e "difíceis".
-    4.  **`UPDATE`:** Atualiza a tabela `poligono`.
+### 4.3. Criação da Tabela de Staging (Produto Final)
 
-* **Descoberta e Correção de Bug (MX-CMX):**
-    * A primeira versão da consulta usava um filtro (`Length(isolabel_ext) > 6`) para remover jurisdições de nível superior.
-    * **Problema:** Isso excluiu incorretamente a jurisdição da Cidade do México (`MX-CMX`), que tem 6 caracteres.
-    * **Sintomas:** 1.114 polígonos que pertenciam a `MX-CMX` ficaram com valores `NULL`, e polígonos na borda foram atribuídos incorretamente a jurisdições vizinhas.
-    * **Correção:** O script final foi corrigido para re-processar todos os polígonos (sobrescrevendo os erros) com uma lógica de filtro ajustada: `(Length(jd.isolabel_ext) > 6 OR jd.isolabel_ext = 'MX-CMX')`.
+Para otimizar o pipeline final, uma tabela de *staging* (`produto_final_staging`) foi criada, contendo apenas as colunas necessárias da massiva tabela `new_inegi`.
 
-* **Script Final:** `src/analysis/02_enrich_poligono_jurisdiction.sql`
+  * **Script:** `src/analysis/03_create_staging_table.sql`
+  * **Processo:** Cria a tabela selecionando `gid`, `geom` e formatando as colunas de endereço (`concat_ws(' ', tipovial, nomvial) AS via`, `numext AS hnum`, `nomasen AS nsvia`). A coluna `cp` original é mantida como `postcode_original`.
 
----
+### 4.4. Enriquecimento e Validação da Tabela de Staging
 
+A tabela de staging (pontos de endereço) foi enriquecida com os dados da tabela `poligono` (áreas de CEP, agora com dados de estado/município).
+
+  * **Script:** `src/analysis/04_enrich_staging_table.sql`
+  * **Processo:** Um `UPDATE` com `ST_Within` é usado para transferir os atributos (`cp`, `estado_name`, `municipio_name`) do polígono para o ponto contido nele.
+  * **Validação (Confronto):** O `postcode_original` (do ponto) é comparado com o `cp` do polígono (`postcode_validado`), e o resultado salvo na coluna `flag_postcode_match`.
+
+-----
+
+## 5\. Fase de Exportação do Produto Final
+
+A etapa final é exportar a tabela de staging enriquecida para um CSV limpo.
+
+  * **Script:** `src/export/export_final.sh`
+  * **Local de Saída:** O script está configurado para salvar o arquivo em `/mnt/dados/MX/mexico/produto_final.csv` (a raiz do repositório).
+  * **Lógica da Consulta:**
+    1.  Seleciona os dados da `produto_final_staging` (gid, via, hnum, nsvia, estado\_name, municipio\_name).
+    2.  Converte a geometria (`geom` SRID 6362) para `latitude` e `longitude` (WGS84) usando `ST_Transform`, `ST_Y` e `ST_X`.
+    3.  Aplica uma lógica de *fallback* (plano B) para o código postal: `COALESCE(s.postcode_validado, s.postcode_original) AS postcode`.
+    4.  Exporta o resultado para CSV usando `\copy`.
+
+**⚠️ Importante: `.gitignore`**
+
+O arquivo de saída `produto_final.csv` é um produto de dados e **não deve ser rastreado pelo Git**. Um arquivo `.gitignore` foi adicionado ao repositório para garantir que este arquivo seja ignorado.
+
+-----
+
+## 6\. Guia de Execução (Pipeline Completo)
+
+Após a ingestão de dados (Fase 3), o fluxo de trabalho de análise e exportação é o seguinte:
+
+**1. Executar Análise no `psql`:**
+Conecte-se ao banco (`psql -U postgres -d mexico`) e execute os scripts de análise em ordem:
+
+```sql
+-- 1. Limpa geometrias (Obrigatório)
+\i src/analysis/01_clean_geometries.sql
+
+-- 2. Enriquece 'poligono' com Estado/Município
+\i src/analysis/02_enrich_poligono_state_municipality.sql
+
+-- 3. Cria tabela 'produto_final_staging' (bruta)
+\i src/analysis/03_create_staging_table.sql
+
+-- 4. Enriquece 'produto_final_staging' (Valida o postcode)
+\i src/analysis/04_enrich_staging_table.sql
+
+-- Saia do psql
+\q
+```
+
+**2. Executar Exportação no `bash`:**
+No seu terminal, na raiz do repositório, execute o script de exportação:
+
+```bash
+bash src/export/export_final.sh
+```
