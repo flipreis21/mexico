@@ -120,12 +120,23 @@ Após a ingestão, os dados brutos foram limpos e cruzados para gerar um produto
 
 O objetivo foi preencher os dados de Estado e Município na tabela `poligono`, usando `optim.jurisdiction` como fonte da verdade.
 
+#### Etapa A: Lógica Principal (Script 02)
+
   * **Script:** `src/analysis/02_enrich_poligono_state_municipality.sql`
   * **Lógica (Híbrida):** O script atualiza a tabela `poligono` em duas etapas, sempre usando o critério de **maior área de sobreposição** (`ST_Area(ST_Intersection(...))`):
     1.  **Etapa 1 (Estado):** Encontra a jurisdição de `length(isolabel_ext) = 6` (ex: 'MX-JAL') com maior sobreposição e preenche `estado_name`.
     2.  **Etapa 2 (Município):** Encontra a jurisdição de `length(isolabel_ext) > 6` (ex: 'MX-JAL-001') com maior sobreposição e preenche `municipio_name`.
     <!-- end list -->
       * **Exceção:** A Etapa 2 ignora polígonos onde o estado é `MX-CMX` (Ciudad de México).
+
+#### Etapa B: Correção de Órfãos (Script 02b)
+
+* **Problema:** A Etapa A falhou em 13 polígonos (`estado_name IS NULL`) devido a lacunas nas geometrias dos estados (`length=6`).
+* **Script:** `src/analysis/02b_patch_orphan_poligonos.sql`
+* **Lógica (Bottom-Up):** Este script de "patch" corrige os 13 polígonos órfãos:
+    1.  Ele ignora os estados e encontra o **município** (`length > 6`) com a maior sobreposição.
+    2.  Ele salva o `municipio_name` e usa o `parent_id` desse município para fazer um `JOIN` com a tabela `optim.jurisdiction` e encontrar o `name` do estado-pai.
+    3.  Isso preenche os `NULL`s restantes.
 
 ### 4.3. Criação da Tabela de Staging (Produto Final)
 
@@ -173,13 +184,16 @@ Conecte-se ao banco (`psql -U postgres -d mexico`) e execute os scripts de anál
 -- 1. Limpa geometrias (Obrigatório)
 \i src/analysis/01_clean_geometries.sql
 
--- 2. Enriquece 'poligono' com Estado/Município
+-- 2. Enriquece 'poligono' (Lógica Principal)
 \i src/analysis/02_enrich_poligono_state_municipality.sql
 
--- 3. Cria tabela 'produto_final_staging' (bruta)
+-- 3. CORRIGE os 13 órfãos
+\i src/analysis/02b_patch_orphan_poligonos.sql
+
+-- 4. Cria tabela 'produto_final_staging'
 \i src/analysis/03_create_staging_table.sql
 
--- 4. Enriquece 'produto_final_staging' (Valida o postcode)
+-- 5. Enriquece 'produto_final_staging' (Validação)
 \i src/analysis/04_enrich_staging_table.sql
 
 -- Saia do psql
