@@ -159,7 +159,7 @@ A tabela de staging (pontos de endereço) foi enriquecida com os dados da tabela
 
 A etapa final é exportar a tabela de staging enriquecida para um CSV limpo.
 
-  * **Script:** `src/export/export_final.sh`
+  * **Script:** `src/export/export_final.sql`
   * **Local de Saída:** O script está configurado para salvar o arquivo em `/mnt/dados/MX/mexico/produto_final.csv` (a raiz do repositório).
   * **Lógica da Consulta:**
     1.  Seleciona os dados da `produto_final_staging` (gid, via, hnum, nsvia, estado\_name, municipio\_name).
@@ -167,9 +167,7 @@ A etapa final é exportar a tabela de staging enriquecida para um CSV limpo.
     3.  Aplica uma lógica de *fallback* (plano B) para o código postal: `COALESCE(s.postcode_validado, s.postcode_original) AS postcode`.
     4.  Exporta o resultado para CSV usando `\copy`.
 
-**⚠️ Importante: `.gitignore`**
 
-O arquivo de saída `produto_final.csv` é um produto de dados e **não deve ser rastreado pelo Git**. Um arquivo `.gitignore` foi adicionado ao repositório para garantir que este arquivo seja ignorado.
 
 -----
 
@@ -196,13 +194,6 @@ Conecte-se ao banco (`psql -U postgres -d mexico`) e execute os scripts de anál
 -- 5. Enriquece 'produto_final_staging' (Validação)
 \i src/analysis/04_enrich_staging_table.sql
 
--- Saia do psql
-\q
-```
-
-**2. Executar Exportação no `bash`:**
-No seu terminal, na raiz do repositório, execute o script de exportação:
-
-```bash
-bash src/export/export_final.sh
+-- 6. Exportação de produto final com estrutura idêntica aos dados da OpenAddress
+\i src/export/export_final.sh
 ```
