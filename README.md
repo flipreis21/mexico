@@ -107,11 +107,20 @@ Esta é a fonte principal de dados de endereço, ingerida a partir de um conjunt
 
 ### 2.6. `public.overture_add` e `public.overture3` (Overture Maps)
 
-Dois métodos foram usados para ingerir e comparar os mesmos dados de endereço da Overture Maps.
+Dois métodos foram usados para ingerir e comparar os mesmos dados de endereço da Overture Maps (Release `2025-08-20.1`).
+
+**Pré-requisito: Instalação do DuckDB**
+
+Ambos os métodos (`overture_add` e `overture3`) exigem o `duckdb` (CLI) instalado no sistema Linux.
+
+  * **Comando de Instalação (Linux):**
+    ```bash
+    curl -s https://install.duckdb.org | sh
+    ```
 
 #### 2.6.1. Método 1: `overture_add` (DuckDB + GDAL + FDW)
 
-  * **Fase 1 (DuckDB):** O script `src/ingestion/overture/overture_add.sql` lê Parquets do S3 da Overture, filtra por `country = 'MX'` e salva localmente.
+  * **Fase 1 (DuckDB):** O script `src/ingestion/overture/overture_add.sql` é executado com `duckdb < src/ingestion/overture/overture_add.sql`. Ele lê Parquets do S3 da Overture, filtra por `country = 'MX'` e salva localmente.
   * **Fase 2 (GDAL):** `ogr2ogr` é usado para transformar o Parquet (com JSON aninhado) em GeoJSON e de volta para Parquet, corrigindo problemas de tipo.
   * **Fase 3 (PostGIS FDW):** A extensão `parquet_fdw` é usada para criar uma `FOREIGN TABLE` (`overture_add`) que lê o arquivo Parquet.
 
@@ -119,9 +128,9 @@ Dois métodos foram usados para ingerir e comparar os mesmos dados de endereço 
 
   * **Método:** Este pipeline usou o DuckDB para se conectar diretamente ao PostGIS.
   * **Script:** `src/ingestion/overture/overture_to_postgres.sql`
-  * **Processo (Executado no DuckDB):**
-    1.  `INSTALL spatial;` e `INSTALL postgres;`
-    2.  `ATTACH 'dbname=mexico...' AS pg (TYPE POSTGRES);`
+  * **Processo (Executado com `duckdb < src/ingestion/overture/overture_to_postgres.sql`):**
+    1.  O script instala as extensões `spatial` e `postgres` *dentro* do DuckDB.
+    2.  Conecta-se ao banco `mexico` via `ATTACH 'dbname=mexico...' AS pg`.
     3.  `CREATE TABLE pg.public.overture3 AS SELECT ...` é usado para ler do S3 da Overture, transformar dados (ex: `TO_JSON()`, `ST_AsText()`) e criar uma **tabela física** (`overture3`) no PostGIS.
 
 -----
