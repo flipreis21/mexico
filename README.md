@@ -197,3 +197,102 @@ Conecte-se ao banco (`psql -U postgres -d mexico`) e execute os scripts de anál
 -- 6. Exportação de produto final com estrutura idêntica aos dados da OpenAddress
 \i src/export/export_final.sh
 ```
+-----
+
+## 7\. Resumo do Produto Final (produto\_final.csv)
+
+Esta seção resume a origem, transformação e estado dos dados contidos no arquivo de saída `produto_final.csv` (e no arquivo de amostra `amostra_produto_final.csv`).
+
+### 7.1. Origem e Transformação dos Dados
+
+O produto final é um conjunto de dados de pontos de endereço derivado da tabela `public.new_inegi` do banco de dados `mexico`.
+
+1.  **Fonte:** Os dados brutos foram baixados pelo colaborador Carlos do site do INEGI.
+2.  **Ingestão:** A fonte consistia em múltiplos arquivos `.zip`, que foram descompactados em um grande conjunto de arquivos `.shp`. Estes shapefiles foram ingeridos em lote (usando os scripts `src/ingestion/new_inegi/`) para criar a tabela única `public.new_inegi`.
+3.  **Filtragem de Atributos:** Para a criação do produto final, foi criada uma tabela de staging (`produto_final_staging`) que aproveitou apenas os atributos essenciais da `new_inegi`. Esta seleção foi baseada nas estruturas de dados de projetos como OpenAddresses e Overture Maps.
+4.  **Enriquecimento Espacial:** A tabela de staging foi enriquecida espacialmente (`ST_Within`) usando os dados da tabela `public.poligono` (que, por sua vez, foi enriquecida pela `optim.jurisdiction`).
+5.  **Validação de Postcode:** O `postcode` original da `new_inegi` foi "confrontado" (validado) com o `postcode` do polígono onde o ponto estava contido.
+
+### 7.2. Mapeamento de Atributos (Produto Final)
+
+A tabela a seguir descreve a origem de cada coluna no arquivo `produto_final.csv`:
+
+| Coluna no CSV Final | Origem (Tabela.Coluna) | Transformação / Lógica |
+| :--- | :--- | :--- |
+| `gid` | `new_inegi.gid` | ID primário original. |
+| `estado` | `poligono.estado_name` | Nome do estado (Ex: 'Jalisco') obtido via `ST_Within`. |
+| `cidade` | `poligono.municipio_name` | Nome do município (Ex: 'Guadalajara') obtido via `ST_Within`. |
+| `via` | `new_inegi.tipovial`, `new_inegi.nomvial` | **Explicação:** O nome da rua é composto pela junção de duas colunas: `tipovial` (ex: 'Avenida', 'Calle') e `nomvial` (ex: 'Vallarta'). Elas são unidas por um espaço para formar um nome completo (ex: 'Avenida Vallarta'). |
+| `hnum` | `new_inegi.numext` | Número externo da porta. |
+| `nsvia` | `new_inegi.nomasen` | Nome do assentamento (bairro/colônia). |
+| `latitude` | `new_inegi.geom` | `ST_Y(ST_Transform(geom, 4326))` (WGS84). |
+| `longitude` | `new_inegi.geom` | `ST_X(ST_Transform(geom, 4326))` (WGS84). |
+| `postcode` | `poligono.cp` (Primário), `new_inegi.cp` (Fallback) | **Explicação:** O código postal final é determinado por um processo de validação espacial. O `postcode` do ponto (`new_inegi.cp`) foi comparado com o `postcode` do polígono (`poligono.cp`) onde o ponto está localizado. **A versão final prioriza o `postcode` do polígono (validado)**. Se o ponto não caiu dentro de nenhum polígono (um "ponto órfão"), o `postcode` original do ponto é usado como um *fallback* (plano B). |
+
+### 7.3. Métricas de Qualidade e Resultados da Análise
+
+A análise foi executada na tabela `produto_final_staging`, que contém um total de **31.236.822** pontos de endereço. A validação espacial (confrontando o `postcode_original` do ponto com o `postcode_validado` do polígono) revelou as seguintes métricas:
+
+#### 1\. Qualidade dos Dados Originais (O "Problema")
+
+  * **Pontos com `postcode` "Zero":** 15.646.607 pontos (**50,09%** do total) tinham um `postcode` original consistindo apenas de zeros (ex: '0', '00000').
+  * **Pontos com `postcode` Nulo:** Apenas 4 pontos (insignificante).
+  * *Esta alta contagem de postcodes "zeros" foi a principal motivação para realizar a validação espacial contra a camada de polígonos.*
+
+#### 2\. Resultados da Validação Espacial (A "Solução")
+
+  * **Correspondência Perfeita:** 13.656.144 pontos (**43,72%** do total) tinham um `postcode` original que bateu perfeitamente com o `postcode` do polígono (`flag_postcode_match = 't'`).
+  * **Pontos Órfãos:** 70.505 pontos (**0,23%** do total) não caíram dentro de nenhum polígono de CEP (`postcode_validado is null`). Para estes, o `postcode` original foi mantido no arquivo final (lógica de *fallback*).
+  * **Total de Conflitos (Corrigidos):** 17.510.171 pontos (**56,06%** do total) tiveram seu `postcode` original **corrigido** pela análise espacial (`flag_postcode_match = 'f'`).
+
+#### 3\. Análise Detalhada dos Conflitos
+
+O dado mais importante é a composição desses 17,5 milhões de conflitos:
+
+  * **Correção de Zeros (Maioria):** 15.619.830 conflitos (**89,2%** dos conflitos) foram casos em que o `postcode_original` era '00000' e foi **corrigido** para um valor real (ex: '41000').
+  * **Correção de Postcodes Reais (Minoria):** 1.890.341 conflitos (**10,8%** dos conflitos) foram casos em que o `postcode_original` *parecia* válido (ex: '41000'), mas a análise espacial provou que estava **errado** e o **corrigiu** para o valor do polígono (ex: '41001').
+
+### 7.4. Consultas de Verificação (QA)
+
+As métricas da seção 7.3 foram derivadas das seguintes consultas SQL, executadas na tabela `produto_final_staging` após a conclusão do script `04_enrich_staging_table.sql`.
+
+```sql
+-- Total de pontos na tabela final
+select count(*) from produto_final_staging;
+-- Resultado: 31236822
+
+-- 1. QUALIDADE DOS DADOS ORIGINAIS
+
+-- Postcodes nulos na origem
+select count(*) from produto_final_staging where postcode_original is null;
+-- Resultado: 4
+
+-- Postcodes '00000' na origem
+select count(*) from produto_final_staging where postcode_original ~ '^[0]+$';
+-- Resultado: 15646607
+
+-- 2. RESULTADOS DA VALIDAÇÃO
+
+-- Pontos Órfãos (não caíram em nenhum polígono)
+select count(*) from produto_final_staging where postcode_validado is null;
+-- Resultado: 70505
+
+-- Correspondências Perfeitas (Original = Validado)
+select count(*) from produto_final_staging where flag_postcode_match ='t';
+-- Resultado: 13656144
+
+-- Total de Conflitos (Original != Validado)
+select count(*) from produto_final_staging where flag_postcode_match ='f';
+-- Resultado: 17510171
+
+-- 3. DETALHAMENTO DOS CONFLITOS
+
+-- Conflitos que eram '00000' (Zeros Corrigidos)
+select count(*) from produto_final_staging where postcode_original ~ '^[0]+$' and flag_postcode_match = 'f';
+-- Resultado: 15619830 
+-- (Nota: 15.646.607 (Total Zeros) - 26.777 (Zeros Órfãos) = 15.619.830)
+
+-- Conflitos que eram postcodes "reais" (Não-Zeros Corrigidos)
+select count(*) from produto_final_staging where postcode_original !~ '^[0]+$' and flag_postcode_match ='f';
+-- Resultado: 1890341
+```
