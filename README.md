@@ -104,6 +104,18 @@ Ambos os métodos exigem o `duckdb` (CLI) instalado no sistema Linux.
   * **Script:** `src/ingestion/overture/overture_to_postgres.sql`
   * **Processo:** O DuckDB (com as extensões `spatial` e `postgres`) conecta-se diretamente ao PostGIS (`ATTACH 'dbname=mexico...'`) e executa um `CREATE TABLE pg.public.overture3 AS SELECT ...` para ler do S3 e escrever uma tabela física no PostGIS.
 
+### 3.7. `optim.estado` e `optim.municipio` (Limites Oficiais INEGI)
+
+Estas são as geometrias "limpas" de estados e municípios usadas como fonte da verdade para o enriquecimento (ver Seção 4.3).
+
+* **Fonte de Download:** [INEGI Marco Geoestadístico 2024](https://www.inegi.org.mx/contenidos/productos/prod_serv/contenidos/espanol/bvinegi/productos/geografia/marcogeo/794551132173_s.zip)
+* **Processo de Extração:**
+    1.  O arquivo `...794551132173_s.zip` é baixado.
+    2.  Dentro dele, o arquivo `mg_2024_integrado.zip` é extraído.
+    3.  Este, por sua vez, contém o subdiretório `conjunto_de_datos`.
+* **Ingestão:** Os arquivos `00ent.shp` (Estados) e `00mun.shp` (Municípios) foram ingeridos no banco de dados (schema `optim`) usando `ogr2ogr` (GDAL).
+* **Transformação (SRID):** Durante a ingestão, os dados foram transformados do EPSG:6372 (origem) para **EPSG:6362** (destino), para garantir a compatibilidade com a tabela `poligono`.
+* **Tabelas Finais:** `optim.estado` e `optim.municipio`.
 -----
 
 ## 4\. Fase de Análise e Enriquecimento
@@ -118,34 +130,33 @@ Após a ingestão, os dados brutos foram limpos e cruzados para gerar um produto
 
 ### 4.2. Enriquecimento dos Polígonos (CEP) com Jurisdição
 
-O objetivo foi preencher os dados de Estado e Município na tabela `poligono`, usando `optim.jurisdiction` como fonte da verdade.
+O primeiro método para preencher `estado_name` e `municipio_name` na tabela `poligono` usou a hierarquia da tabela `optim.jurisdiction` baseada no `isolabel_ext`.
 
-#### Etapa A: Lógica Principal (Script 02)
+* **Scripts:** `src/analysis/02_enrich_poligono_state_municipality.sql` e `src/analysis/02b_patch_orphan_poligonos.sql`
+* **Lógica (Híbrida):**
+    1.  **Estado:** Encontrava a jurisdição de `length(isolabel_ext) = 6` com maior sobreposição.
+    2.  **Município:** Encontrava a jurisdição de `length(isolabel_ext) > 6` com maior sobreposição (exceto para 'MX-CMX').
+    3.  **Patch:** Um script (`02b`) corrigia 13 polígonos órfãos usando uma lógica "bottom-up" (do município para o estado via `parent_id`).
 
-  * **Script:** `src/analysis/02_enrich_poligono_state_municipality.sql`
-  * **Lógica (Híbrida):** O script atualiza a tabela `poligono` em duas etapas, sempre usando o critério de **maior área de sobreposição** (`ST_Area(ST_Intersection(...))`):
-    1.  **Etapa 1 (Estado):** Encontra a jurisdição de `length(isolabel_ext) = 6` (ex: 'MX-JAL') com maior sobreposição e preenche `estado_name`.
-    2.  **Etapa 2 (Município):** Encontra a jurisdição de `length(isolabel_ext) > 6` (ex: 'MX-JAL-001') com maior sobreposição e preenche `municipio_name`.
-    <!-- end list -->
-      * **Exceção:** A Etapa 2 ignora polígonos onde o estado é `MX-CMX` (Ciudad de México).
+### 4.3. Enriquecimento dos Polígonos (Método 2: Fontes Limpas) [RECOMENDADO]
 
-#### Etapa B: Correção de Órfãos (Script 02b)
+Devido à complexidade do Método 1, uma abordagem mais robusta foi desenvolvida usando fontes de geometria limpas e dedicadas(`optim.estado` e `optim.municipio`) ingeridas na **Seção 3.7**.
 
-* **Problema:** A Etapa A falhou em 13 polígonos (`estado_name IS NULL`) devido a lacunas nas geometrias dos estados (`length=6`).
-* **Script:** `src/analysis/02b_patch_orphan_poligonos.sql`
-* **Lógica (Bottom-Up):** Este script de "patch" corrige os 13 polígonos órfãos:
-    1.  Ele ignora os estados e encontra o **município** (`length > 6`) com a maior sobreposição.
-    2.  Ele salva o `municipio_name` e usa o `parent_id` desse município para fazer um `JOIN` com a tabela `optim.jurisdiction` e encontrar o `name` do estado-pai.
-    3.  Isso preenche os `NULL`s restantes.
+* **Script:** `src/analysis/enrich_poligono_mx.sql`
+* **Lógica (Baseada em Fontes Limpas):** Este script é mais rápido e robusto. Ele ignora a lógica `isolabel_ext` e usa tabelas de geometria separadas (ambas em SRID 6362, eliminando a necessidade de `ST_Transform`):
+    1.  **Etapa 1 (Estado):** Encontra o `NOMGEO` da tabela `optim.estado` com a maior sobreposição (`ST_Area(ST_Intersection(...))`) e preenche `poligono.estado_name`.
+    2.  **Etapa 2 (Município):** Encontra o `NOMGEO` da tabela `optim.municipio` com a maior sobreposição e preenche `poligono.municipio_name`.
 
-### 4.3. Criação da Tabela de Staging (Produto Final)
+### 4.4. Criação da Tabela de Staging (Produto Final)
+
+*(Esta etapa depende do `poligono` ter `estado_name` e `municipio_name`, fornecidos pelo Método 1 ou 2)*
 
 Para otimizar o pipeline final, uma tabela de *staging* (`produto_final_staging`) foi criada, contendo apenas as colunas necessárias da massiva tabela `new_inegi`.
 
   * **Script:** `src/analysis/03_create_staging_table.sql`
   * **Processo:** Cria a tabela selecionando `gid`, `geom` e formatando as colunas de endereço (`concat_ws(' ', tipovial, nomvial) AS via`, `numext AS hnum`, `nomasen AS nsvia`). A coluna `cp` original é mantida como `postcode_original`.
 
-### 4.4. Enriquecimento e Validação da Tabela de Staging
+### 4.5. Enriquecimento e Validação da Tabela de Staging
 
 A tabela de staging (pontos de endereço) foi enriquecida com os dados da tabela `poligono` (áreas de CEP, agora com dados de estado/município).
 
@@ -182,8 +193,8 @@ Conecte-se ao banco (`psql -U postgres -d mexico`) e execute os scripts de anál
 -- 1. Limpa geometrias (Obrigatório)
 \i src/analysis/01_clean_geometries.sql
 
--- 2. Enriquece 'poligono' (Lógica Principal)
-\i src/analysis/02_enrich_poligono_state_municipality.sql
+-- 2. Enriquece 'poligono' (Método 2 - Fontes Limpas)
+\i src/analysis/enrich_poligono_mx.sql
 
 -- 3. CORRIGE os 13 órfãos
 \i src/analysis/02b_patch_orphan_poligonos.sql
@@ -195,7 +206,7 @@ Conecte-se ao banco (`psql -U postgres -d mexico`) e execute os scripts de anál
 \i src/analysis/04_enrich_staging_table.sql
 
 -- 6. Exportação de produto final com estrutura idêntica aos dados da OpenAddress
-\i src/export/export_final.sh
+\i src/export/export_final.sql
 ```
 -----
 
