@@ -78,12 +78,41 @@ Dados de endereço em formato CSV (Fonte: Carlos/OpenAddresses). O arquivo `ineg
 
 ### 3.5. `public.new_inegi` (Endereços INEGI - Fonte Shapefiles)
 
-Esta é a fonte principal de dados de endereço, ingerida a partir de um conjunto complexo de shapefiles brutos (Fonte: Carlos, esperado em `/mnt/dados/MX/download-final`).
+Esta é a fonte principal de dados de endereço. Os dados brutos (fornecidos por Carlos) chegaram em uma estrutura complexa de arquivos `.zip` aninhados contendo diversas camadas geográficas misturadas.
 
-  * **Fase 1: Staging (Extração e Organização):** `chmod`, `unzip` recursivo e `find` para catalogar os SHPs na pasta `direccion`.
-  * **Fase 2: Carga (GDAL/OGR via Docker):**
-      * **Script Principal:** `src/ingestion/new_inegi/ingest.sh` (cria a tabela `new_inegi` com o primeiro SHP e anexa os demais via `ogr2ogr -append`).
-      * **Script de Contingência:** `src/ingestion/new_inegi/re_ingest.sh` (retoma a ingestão a partir de um ponto de parada).
+* **Localização Esperada:** `/mnt/dados/MX/download-final`
+* **Fase 1: Staging (Extração e Organização)**
+    * **Script de Referência:** `src/ingestion/new_inegi/prepare_staging.sh`
+    * **Desafio:** Os dados continham múltiplos níveis de compactação (zips dentro de zips).
+    * **Processo:**
+        1.  **Permissões:** Ajuste de permissões (`chmod`) para garantir acesso.
+        2.  **Extração Recursiva:** Execução de múltiplos comandos `unzip` em cascata, movendo o conteúdo para pastas temporárias (`extract1` a `extract5`) para garantir que nenhum arquivo fosse perdido.
+        3.  **Catalogação:** Criação de pastas temáticas (`direccion`, `vial`, `manzana`, etc.) e uso do comando `find` para mover os Shapefiles corretos para cada pasta baseando-se no sufixo do arquivo (ex: `*ne.shp` -> `direccion`).
+
+* **Fase 2: Carga (GDAL/OGR via Docker)**
+    * O processo de carga foi focado na pasta resultante `direccion`, que continha os shapefiles de nós de endereço.
+    * **Script Principal:** `src/ingestion/new_inegi/ingest.sh`
+        * Script `bash` que usa `ogr2ogr` (via Docker) em loop. O primeiro SHP cria a tabela `public.new_inegi` (EPSG:6362), e os demais são anexados (`-append`).
+    * **Script de Contingência:** `src/ingestion/new_inegi/re_ingest.sh`
+        * Script de retomada que continua o `ogr2ogr -append` a partir de um ponto de parada (`LAST_STARTED=...`).### 3.5. `public.new_inegi` (Endereços INEGI - Fonte Shapefiles)
+
+Esta é a fonte principal de dados de endereço. Os dados brutos (fornecidos por Carlos) chegaram em uma estrutura complexa de arquivos `.zip` aninhados contendo diversas camadas geográficas misturadas.
+
+* **Localização Esperada:** `/mnt/dados/MX/download-final`
+* **Fase 1: Staging (Extração e Organização)**
+    * **Script de Referência:** `src/ingestion/new_inegi/prepare_staging.sh`
+    * **Desafio:** Os dados continham múltiplos níveis de compactação (zips dentro de zips).
+    * **Processo:**
+        1.  **Permissões:** Ajuste de permissões (`chmod`) para garantir acesso.
+        2.  **Extração Recursiva:** Execução de múltiplos comandos `unzip` em cascata, movendo o conteúdo para pastas temporárias (`extract1` a `extract5`) para garantir que nenhum arquivo fosse perdido.
+        3.  **Catalogação:** Criação de pastas temáticas (`direccion`, `vial`, `manzana`, etc.) e uso do comando `find` para mover os Shapefiles corretos para cada pasta baseando-se no sufixo do arquivo (ex: `*ne.shp` -> `direccion`).
+
+* **Fase 2: Carga (GDAL/OGR via Docker)**
+    * O processo de carga foi focado na pasta resultante `direccion`, que continha os shapefiles de nós de endereço.
+    * **Script Principal:** `src/ingestion/new_inegi/ingest.sh`
+        * Script `bash` que usa `ogr2ogr` (via Docker) em loop. O primeiro SHP cria a tabela `public.new_inegi` (EPSG:6362), e os demais são anexados (`-append`).
+    * **Script de Contingência:** `src/ingestion/new_inegi/re_ingest.sh`
+        * Script de retomada que continua o `ogr2ogr -append` a partir de um ponto de parada (`LAST_STARTED=...`).
 
 ### 3.6. `public.overture_add` e `public.overture3` (Overture Maps)
 
